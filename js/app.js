@@ -215,6 +215,11 @@ P['hub'] = () => {
 };
 
 /* ---------- CLIENTE ---------- */
+// Visitante: pede só com nome e telefone, sem conta e sem perfil.
+const meOf = d => (d.session.guest && d.guest ? d.guest : d.user);
+const cli = () => meOf(db);
+const isGuest = () => !!(db.session.guest && db.guest);
+const isMine = o => (isGuest() ? !o.email && o.phone === db.guest.phone : o.email === db.user.email);
 P['cliente-login'] = () => {
   const f = $('#loginForm'); f.email.value = db.user.email;
   f.onsubmit = e => {
@@ -222,7 +227,7 @@ P['cliente-login'] = () => {
     const email = f.email.value.trim(), pw = f.password.value;
     if (!/^\S+@\S+\.\S+$/.test(email)) return formErr(f, 'Informe um e-mail válido.');
     if (pw.length < 4) return formErr(f, 'A senha precisa ter pelo menos 4 caracteres.');
-    update(d => { d.user.email = email; d.session.client = true; });
+    update(d => { d.user.email = email; d.session.client = true; d.session.guest = false; });
     go('inicio.html', `Bem-vinda de volta, ${first(db.user.name)}!`);
   };
 };
@@ -235,12 +240,25 @@ P['cliente-cadastro'] = () => {
     if (v('phone').replace(/\D/g, '').length < 10) return formErr(f, 'Informe um telefone válido com DDD.');
     if (!/^\S+@\S+\.\S+$/.test(v('email'))) return formErr(f, 'Informe um e-mail válido.');
     if (f.password.value.length < 6) return formErr(f, 'A senha precisa ter pelo menos 6 caracteres.');
-    update(d => { d.user = { name: v('name'), email: v('email'), phone: v('phone'), fav: [], addresses: v('address') ? [{ label: 'Casa', line: v('address'), district: '', city: 'Rio Branco - AC', cep: '', main: true }] : [] }; d.session.client = true; });
+    update(d => { d.user = { name: v('name'), email: v('email'), phone: v('phone'), fav: [], addresses: v('address') ? [{ label: 'Casa', line: v('address'), district: '', city: 'Rio Branco - AC', cep: '', main: true }] : [] }; d.session.client = true; d.session.guest = false; });
     go('inicio.html', 'Conta criada com sucesso!');
   };
 };
+P['cliente-visitante'] = () => {
+  const f = $('#guestForm');
+  f.onsubmit = e => {
+    e.preventDefault();
+    const name = f.elements['name'].value.trim(), phone = f.elements['phone'].value.trim();
+    if (!name) return formErr(f, 'Informe seu nome.');
+    if (phone.replace(/\D/g, '').length < 10) return formErr(f, 'Informe um telefone válido com DDD.');
+    update(d => { d.guest = { name, phone, email: '', fav: [], addresses: d.guest && d.guest.phone === phone ? d.guest.addresses : [] }; d.session.guest = true; d.session.client = false; });
+    go('inicio.html', `Olá, ${first(name)}! Bom pedido.`);
+  };
+};
 P['cliente-inicio'] = () => {
-  $('#hello').textContent = `Olá, ${first(db.user.name)}!`;
+  $('#hello').textContent = `Olá, ${first(cli().name)}!`;
+  // visitante não tem perfil: esconde o atalho (mantém o espaço do cabeçalho)
+  if (isGuest()) $$('a[href="perfil.html"]').forEach(a => { a.removeAttribute('href'); a.style.visibility = 'hidden'; a.tabIndex = -1; a.setAttribute('aria-hidden', 'true'); });
   const s = $('#search');
   render = () => {
     const cat = ($('input[name=cat]:checked') || {}).value || 'pizza';
@@ -267,8 +285,8 @@ P['cliente-inicio'] = () => {
 P['cliente-item'] = () => {
   const p = product(qs('id')) || db.menu[0];
   let qty = 1; const isP = p.cat !== 'bebida';
-  const fav = $('#fav'); const paintFav = () => { const on = db.user.fav.includes(p.id); fav.classList.toggle('is-fav', on); fav.setAttribute('aria-pressed', on); };
-  fav.onclick = () => { update(d => { const i = d.user.fav.indexOf(p.id); i < 0 ? d.user.fav.push(p.id) : d.user.fav.splice(i, 1); }); paintFav(); toast(db.user.fav.includes(p.id) ? 'Adicionada aos favoritos' : 'Removida dos favoritos', 'info'); };
+  const fav = $('#fav'); const paintFav = () => { const on = cli().fav.includes(p.id); fav.classList.toggle('is-fav', on); fav.setAttribute('aria-pressed', on); };
+  fav.onclick = () => { update(d => { const i = meOf(d).fav.indexOf(p.id); i < 0 ? meOf(d).fav.push(p.id) : meOf(d).fav.splice(i, 1); }); paintFav(); toast(cli().fav.includes(p.id) ? 'Adicionada aos favoritos' : 'Removida dos favoritos', 'info'); };
   paintFav();
   const opt = (name, k, a, b, on) => `<label class="opt"><input class="hidden-input" type="radio" name="${name}" value="${k}" ${on ? 'checked' : ''}><span class="box"><b>${a}</b><small>${b}</small></span></label>`;
   $('#item').innerHTML = `<div class="hero">${thumbFor(p, 180)}<div class="dots"><i></i><i></i><i></i></div></div>
@@ -295,13 +313,13 @@ P['cliente-carrinho'] = () => {
     const c = db.cart, m = db.cartMeta;
     if (!c.length) { v.innerHTML = `<div class="empty" style="padding:60px 20px">${ic('cart', 40)}<b>Seu carrinho está vazio</b><span>Que tal uma pizza quentinha?</span><a class="btn primary" href="inicio.html">Ver cardápio</a></div>`; paintCommon(); return; }
     const sub = subtotal(c), fee = feeFor(m.type, sub);
-    const addrs = db.user.addresses;
+    const addrs = cli().addresses;
     const a = addrs[m.addr] || addrs[0];
     v.innerHTML = `<div class="card" style="padding:4px 14px">${c.map((i, k) => `<div class="cart-item">${i.cat === 'bebida' ? thumbFor(i, 52) : pz(i.kind, 52)}<div class="grow col"><b>${esc(i.name)}</b><span class="xs muted">${i.cat === 'bebida' ? 'Bebida' : SIZE_NAME[i.size] + ' · Borda ' + BORDERS[i.border][0]}${i.obs ? ' · ' + esc(i.obs) : ''}</span><span class="xb" style="color:var(--primary)">${brl(i.unit * i.qty)}</span></div>
       <span class="stepper"><button type="button" data-dec="${k}" aria-label="Diminuir">${ic(i.qty === 1 ? 'x' : 'minus', 14)}</button><b>${i.qty}</b><button type="button" class="plus" data-inc="${k}" aria-label="Aumentar">${ic('plus', 14)}</button></span></div>`).join('')}</div>
     <a class="btn dashed" href="inicio.html">${ic('plus', 16)} Adicionar mais itens</a>
     <div class="col g8"><b class="xb">Tipo de pedido</b><div class="row g10">${['entrega', 'retirada'].map(t => `<label class="opt toggle2"><input class="hidden-input" type="radio" name="tipo" value="${t}" ${m.type === t ? 'checked' : ''}><span class="box">${ic(t === 'entrega' ? 'truck' : 'store', 18)} ${t === 'entrega' ? 'Delivery' : 'Retirada'}</span></label>`).join('')}</div></div>
-    ${m.type === 'entrega' ? `<div class="col g8"><b class="xb">Endereço de entrega</b>${a ? `<label class="card flat addr" style="cursor:pointer"><span class="ib soft">${ic('pin')}</span><div class="grow"><b>${esc(a.line)}</b><div class="xs muted">${esc([a.district, a.city].filter(Boolean).join(' · '))}</div></div>
+    ${m.type === 'entrega' ? `<div class="col g8"><b class="xb">Endereço de entrega</b>${isGuest() ? `<label class="fld"><span class="input"><input id="guestAddr" type="text" placeholder="Rua, número e bairro *" value="${esc(a ? a.line : '')}" aria-label="Endereço de entrega"></span></label>` : a ? `<label class="card flat addr" style="cursor:pointer"><span class="ib soft">${ic('pin')}</span><div class="grow"><b>${esc(a.line)}</b><div class="xs muted">${esc([a.district, a.city].filter(Boolean).join(' · '))}</div></div>
       ${addrs.length > 1 ? `<select id="addrSel" class="addr-sel" aria-label="Trocar endereço">${addrs.map((x, i) => `<option value="${i}" ${i === m.addr ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select>` : ''}<span style="color:var(--primary)">${ic('edit', 18)}</span></label>` : `<a class="btn secondary" href="perfil.html">+ Cadastrar endereço</a>`}</div>`
       : `<div class="col g8"><b class="xb">Retirar na loja</b><div class="card flat addr"><span class="ib soft">${ic('store')}</span><div class="grow"><b>Elias Pizzaria</b><div class="xs muted">${STORE_ADDR}</div></div></div></div>`}
     <div class="col g8"><b class="xb">Pagamento</b><div class="row g8 wrap">${['Pix', 'Cartão', 'Dinheiro'].map(p => `<label><input class="hidden-input" type="radio" name="pg" value="${p}" ${m.pay === p ? 'checked' : ''}><span class="chip">${p}</span></label>`).join('')}</div></div>
@@ -315,16 +333,21 @@ P['cliente-carrinho'] = () => {
     if (inc) { update(d => { d.cart[inc.dataset.inc].qty++; }); render(); }
     if (e.target.closest('#checkout')) {
       const m = db.cartMeta;
-      if (m.type === 'entrega' && !db.user.addresses.length) return toast('Cadastre um endereço de entrega', 'err');
+      if (m.type === 'entrega' && !cli().addresses.length) return toast(isGuest() ? 'Informe o endereço de entrega' : 'Cadastre um endereço de entrega', 'err');
       let id;
       update(d => {
-        const sub = subtotal(d.cart), fee = feeFor(m.type, sub), a = d.user.addresses[m.addr] || d.user.addresses[0];
+        const sub = subtotal(d.cart), fee = feeFor(m.type, sub), a = meOf(d).addresses[m.addr] || meOf(d).addresses[0];
         id = d.seq++;
-        d.orders.push({ id, customer: d.user.name, phone: d.user.phone, email: d.user.email, address: m.type === 'entrega' ? `${a.line}${a.district ? ' — ' + a.district : ''}` : '', ref: '', type: m.type, items: d.cart.map(i => ({ ...i, step: 0 })), status: 'novo', hist: { novo: now() }, created: now(), pay: m.pay, obs: d.cart.map(i => i.obs).filter(Boolean).join(' · '), fee, total: sub + fee, driver: null, source: 'app' });
+        d.orders.push({ id, customer: meOf(d).name, phone: meOf(d).phone, email: meOf(d).email, address: m.type === 'entrega' ? `${a.line}${a.district ? ' — ' + a.district : ''}` : '', ref: '', type: m.type, items: d.cart.map(i => ({ ...i, step: 0 })), status: 'novo', hist: { novo: now() }, created: now(), pay: m.pay, obs: d.cart.map(i => i.obs).filter(Boolean).join(' · '), fee, total: sub + fee, driver: null, source: 'app' });
         d.cart = [];
       });
       go(`acompanhar.html?id=${id}`, 'Pedido enviado para a pizzaria!');
     }
+  });
+  v.addEventListener('input', e => {
+    if (e.target.id !== 'guestAddr') return;
+    const line = e.target.value.trim();
+    update(d => { d.guest.addresses = line ? [{ label: 'Entrega', line, district: '', city: 'Rio Branco - AC', cep: '', main: true }] : []; });
   });
   v.addEventListener('change', e => {
     if (e.target.name === 'tipo') update(d => d.cartMeta.type = e.target.value);
@@ -337,7 +360,7 @@ P['cliente-carrinho'] = () => {
 P['cliente-pedidos'] = () => {
   render = () => {
     const f = ($('input[name=f]:checked') || {}).value || 'all';
-    const mine = db.orders.filter(o => o.email === db.user.email).sort((a, b) => b.created - a.created);
+    const mine = db.orders.filter(isMine).sort((a, b) => b.created - a.created);
     const list = mine.filter(o => f === 'all' || (f === 'and' ? active(o) : !active(o)));
     $('#list').innerHTML = list.length ? list.map(o => `<div class="card col g10"><div class="row between g8"><b class="md xb">${dfmt(o.created)}</b>${badgeOf(o)}</div><span class="xs muted b">Pedido #${o.id}</span><p class="sm">${o.items.map(itemLabel).map(esc).join(', ')}</p><div class="divider"></div>${kv('Total', brl(o.total), '', 'font-family:Fredoka,sans-serif;color:var(--primary);font-size:17px')}
       <div class="row g8"><button class="btn secondary sm grow" data-repeat="${o.id}">${ic('repeat', 15)} Repetir</button><a class="btn info sm grow" href="acompanhar.html?id=${o.id}">${active(o) ? 'Acompanhar' : 'Detalhes'}</a>
@@ -368,7 +391,7 @@ P['cliente-acompanhar'] = () => {
     entregue: ['home', 'Pedido entregue!', 'Aproveite sua pizza! Obrigado pela preferência.'],
     cancelado: ['x', 'Pedido cancelado', 'Este pedido foi cancelado. Se precisar, faça um novo pedido.'] };
   render = () => {
-    const mine = db.orders.filter(o => o.email === db.user.email).sort((a, b) => b.created - a.created);
+    const mine = db.orders.filter(isMine).sort((a, b) => b.created - a.created);
     const o = order(qs('id')) || mine[0];
     if (!o) { $('#track').innerHTML = `<div class="empty">${ic('list', 36)}<b>Nenhum pedido para acompanhar</b><a class="btn primary" href="inicio.html">Fazer um pedido</a></div>`; return; }
     const steps = o.type === 'retirada' ? ST.filter(s => s !== 'rota') : ST;
@@ -390,7 +413,7 @@ P['cliente-acompanhar'] = () => {
     paintCommon();
   };
   $('#track').addEventListener('click', e => {
-    const o = order(qs('id')) || db.orders.filter(x => x.email === db.user.email).sort((a, b) => b.created - a.created)[0];
+    const o = order(qs('id')) || db.orders.filter(isMine).sort((a, b) => b.created - a.created)[0];
     if (e.target.closest('#sim')) {
       const steps = o.type === 'retirada' ? ST.filter(s => s !== 'rota') : ST;
       const nx = steps[steps.indexOf(o.status) + 1];
@@ -402,6 +425,7 @@ P['cliente-acompanhar'] = () => {
   render(); setInterval(render, 20000);
 };
 P['cliente-perfil'] = () => {
+  if (isGuest()) { go('inicio.html'); return; }
   render = () => {
     const u = db.user;
     $('#profile').innerHTML = `<div class="card col g4" style="align-items:center;padding:22px"><span class="avatar-xl">${initials(u.name)}</span><h2 style="margin-top:8px;font-size:20px">${esc(u.name)}</h2><span class="sm muted">${esc(u.email)}</span><span class="sm muted">${esc(u.phone)}</span></div>
